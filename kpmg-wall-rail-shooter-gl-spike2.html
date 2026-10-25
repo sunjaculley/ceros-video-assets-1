@@ -597,8 +597,8 @@ html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:none
       </svg>
     </div>
     <a id="ctrlFallback" class="ctrlfb" href="#" rel="noopener" hidden>Controller not detected here. Open full screen</a>
-    <a class="touchlink l" href="https://kpmg-design.ceros.site/games-for-teams/home" rel="noopener"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="3.5" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="8"/><circle cx="16" cy="16" r="13" opacity=".5"/></svg><span data-copy="touch"></span></a>
-    <a class="touchlink r" href="https://kpmg-design.ceros.site/games-for-teams/home" rel="noopener"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="3.5" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="8"/><circle cx="16" cy="16" r="13" opacity=".5"/></svg><span data-copy="touch"></span></a>
+    <a class="touchlink l" href="https://kpmg-design.ceros.site/games-for-teams" rel="noopener"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="3.5" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="8"/><circle cx="16" cy="16" r="13" opacity=".5"/></svg><span data-copy="touch"></span></a>
+    <a class="touchlink r" href="https://kpmg-design.ceros.site/games-for-teams" rel="noopener"><svg viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="3.5" fill="currentColor" stroke="none"/><circle cx="16" cy="16" r="8"/><circle cx="16" cy="16" r="13" opacity=".5"/></svg><span data-copy="touch"></span></a>
   </section>
 
   <section id="hud"><svg id="hudArcs" viewBox="0 0 4352 1224" aria-hidden="true"></svg>
@@ -1647,7 +1647,17 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseGame(f
   fb.addEventListener('click',e=>{ e.preventDefault(); window.open(location.href.split('#')[0],'_blank','noopener') });
   setInterval(()=>{ let pol=true; try{ const pp=document.permissionsPolicy||document.featurePolicy; if(pp&&pp.allowsFeature)pol=pp.allowsFeature('gamepad') }catch(err){}
     fb.hidden=!(emb&&G.mode==='cover'&&padCount===0&&(gpBlocked||!pol||performance.now()>6000)) },1000) }
-document.querySelectorAll('.touchlink').forEach(a=>a.addEventListener('click',e=>{ e.preventDefault(); const u=a.href; try{ window.top.location.href=u }catch(err){ window.location.href=u } }));
+/* wall integration: embedded -> tell the parent; standalone -> plain link */
+const WALL_EMBEDDED=(window.parent!==window);
+const wallMsg=o=>{ try{ window.parent.postMessage(o,'*') }catch(err){} };
+document.querySelectorAll('.touchlink').forEach(a=>a.addEventListener('click',e=>{ if(WALL_EMBEDDED){ e.preventDefault(); wallMsg({wallGo:'choose'}) } }));
+if(WALL_EMBEDDED){ let lastAct=0; const act=()=>{ const t=performance.now(); if(t-lastAct>=1000){ lastAct=t; wallMsg({wallActivity:1}) } };
+  addEventListener('pointerdown',act,true); addEventListener('keydown',act,true);
+  const prev=new Map();
+  setInterval(()=>{ let pads=[]; try{ pads=navigator.getGamepads?[...navigator.getGamepads()]:[] }catch(err){ return }
+    for(const p of pads){ if(!p||!p.connected)continue; const pb=prev.get(p.index)||[]; let hit=false;
+      p.buttons.forEach((b,i)=>{ if(b.pressed&&!pb[i])hit=true }); for(const v of p.axes){ if(Math.abs(v)>.2)hit=true }
+      prev.set(p.index,p.buttons.map(b=>b.pressed)); if(hit)act() } },100) }
 
 /* ---------- idle reset: someone walks away -> pause, then back to the cover. Limits in seconds. ---------- */
 const IDLE={guide:90,cover:30,brief:60,pause:60,over:20,play:45};
