@@ -813,19 +813,20 @@ const music=(()=>{
 addEventListener('load',()=>music.preload());
 
 /* ---------- audio fx: layered synth voices, stereo placement, shared reverb, master limiter ---------- */
-let ac=null,master=null,comp=null,rvIn=null,nbuf=null,voices=0,lastPadUnlock=0;
+let ac=null,master=null,comp=null,tunLP=null,rvWet=null,rvIn=null,nbuf=null,voices=0,lastPadUnlock=0;
 function audioUnlock(){ try{ if(!ac){ac=new (window.AudioContext||window.webkitAudioContext)();
     comp=ac.createDynamicsCompressor();comp.threshold.value=-14;comp.knee.value=12;comp.ratio.value=5;comp.attack.value=.004;comp.release.value=.18;
-    master=ac.createGain();master.gain.value=.34;master.connect(comp);comp.connect(ac.destination);
+    master=ac.createGain();master.gain.value=.34;tunLP=ac.createBiquadFilter();tunLP.type='lowpass';tunLP.frequency.value=20000;master.connect(tunLP);tunLP.connect(comp);comp.connect(ac.destination);
     const len=Math.floor(ac.sampleRate*1.7),ir=ac.createBuffer(2,len,ac.sampleRate);
     for(let c=0;c<2;c++){const d=ir.getChannelData(c);for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2.6)}
-    const cv=ac.createConvolver();cv.buffer=ir;const hp=ac.createBiquadFilter();hp.type='highpass';hp.frequency.value=260;const wet=ac.createGain();wet.gain.value=.55;
+    const cv=ac.createConvolver();cv.buffer=ir;const hp=ac.createBiquadFilter();hp.type='highpass';hp.frequency.value=260;const wet=ac.createGain();wet.gain.value=.55;rvWet=wet;
     rvIn=ac.createGain();rvIn.connect(hp);hp.connect(cv);cv.connect(wet);wet.connect(master)}
   if(ac.state==='suspended')ac.resume().catch(()=>{}) }catch(e){} music.kick() }
 addEventListener('pointerdown',audioUnlock);
+addEventListener('pointerdown',e=>{ try{ if(e.target.closest&&e.target.closest('button,a,.pbtn')&&typeof sfx!=='undefined'&&sfx.uiOk)sfx.uiOk() }catch(err){} },true);
 /* one output bus per voice: distance (z) dulls and softens, x pans, optional reverb send */
-function bus(sp,rv){ const g=ac.createGain(); let n=g; const x=sp&&sp[0]!=null?sp[0]:2176, z=sp&&sp[1]!=null?sp[1]:900;
-  const pan=Math.max(-1,Math.min(1,(x-2176)/2200))*.85, dist=Math.max(0,Math.min(1,(z-900)/8000));
+function bus(sp,rv){ const g=ac.createGain(); let n=g; const x=sp&&sp[0]!=null?sp[0]:0, z=sp&&sp[1]!=null?sp[1]:900;
+  const pan=Math.max(-1,Math.min(1,x/2200))*.85, dist=Math.max(0,Math.min(1,(z-900)/8000));
   g.gain.value=1-dist*.65;
   if(dist>.05){ const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.value=16000-dist*13000; n.connect(lp); n=lp }
   if(ac.createStereoPanner){ const p=ac.createStereoPanner(); p.pan.value=pan; n.connect(p); n=p }
@@ -867,6 +868,143 @@ const sfx={sp:null,
   count:()=>{tone(660,660,.12,'triangle',.12,{rv:.2});tone(1320,1320,.1,'sine',.04)},
   go:()=>{tone(990,1980,.3,'triangle',.13,{rv:.35});tone(495,990,.34,'sine',.1,{rv:.35});noise(.25,.08,6000,{type:'highpass',f1:2500,rv:.3})},
   dmg:()=>{tone(120,38,.45,'sine',.36,{rv:.3});tone(170,55,.3,'sawtooth',.13);noise(.35,.22,1000,{f1:100,rv:.3});noise(.03,.2,7000,{type:'highpass',f1:3000});music.duck(.5,.4)}};
+
+
+/* ---------- sound design pass 3: sustained loops, state-driven cues, UI, enemies, bombs ---------- */
+let engDuck=0,lastPadJ=0;
+const pnx=x=>Math.max(-1,Math.min(1,x/2200))*.85;
+const sfxMore={
+  lockN:(n,sync)=>{ const f=[880,988,1109,1319,1480,1760][Math.min(5,Math.max(0,n-1))]; tone(f,f*1.02,.07,'triangle',.08,{rv:.15}); tone(f*2,f*2,.05,'sine',.03); if(sync)ARP([f*1.5,f*2],.04,'sine',.06,.3) },
+  ccStage:(st,x)=>{ const sp=[x,900]; tone(500+st*400,900+st*700,.2,'sawtooth',.06,{sp,rv:.3}); fm(1200+st*500,2,1.5,.25,.05,{sp,rv:.4}) },
+  roll:(x,edge)=>{ const sp=[x,900]; noise(.5,.14,900,{type:'bandpass',f1:4200,q:1.1,rv:.1,sp}); tone(300,700,.4,'sine',.03,{sp});
+    if(edge){ fm(2300,2.76,2,.5,.1,{sp,rv:.4}); noise(.1,.2,9000,{type:'highpass',f1:4500,sp}); fm(1500,3.1,1.6,.4,.07,{sp,at:.12,rv:.4}) } },
+  hit:(x,z,d,ty)=>{ const sp=SP(x,z); if(ty==='rival'||ty==='sentry'){ fm(1700,2.3,1.4,.16,.08,{sp,rv:.2}); noise(.05,.1,7000,{type:'bandpass',f1:2500,q:2,sp}) } else { tone(300,80,.13,'square',.06,{sp,j:.08}); noise(.06,.1,6000,{type:'bandpass',f1:1500,q:2,sp}) }
+    if(d>=3){ tone(130,50,.2,'sine',.2,{sp}); noise(.12,.15,2200,{f1:200,sp}) } },
+  padBoost:x=>{ const sp=[x,900]; tone(80,40,.3,'sine',.35,{sp}); noise(.45,.2,500,{type:'bandpass',f1:5200,q:1,sp,rv:.2}); tone(240,1500,.35,'sawtooth',.07,{sp}); fm(900,1.5,2,.4,.05,{sp,at:.05}) },
+  padJump:x=>{ const sp=[x,900]; tone(150,420,.18,'sine',.3,{sp}); tone(300,1300,.28,'triangle',.09,{sp,rv:.3}); ARP([660,880,1320],.05,'sine',.06,.3); noise(.2,.08,2500,{type:'bandpass',f1:900,q:1.2,sp}) },
+  jump:x=>{ const sp=[x,900]; tone(200,520,.14,'sine',.12,{sp}); noise(.18,.06,1200,{type:'bandpass',f1:3000,q:1,sp}) },
+  land:(x,tr)=>{ const sp=[x,900]; tone(110,45,.2,'sine',.25,{sp}); noise(.08,.08,1500,{f1:200,sp}); if(tr)ARP([880,1320,1760],.04,'triangle',.07,.3) },
+  boostOn:x=>{ const sp=[x,900]; tone(90,45,.25,'sine',.3,{sp}); noise(.4,.17,700,{type:'bandpass',f1:5000,q:1.2,sp,rv:.15}); tone(180,900,.3,'sawtooth',.06,{sp}) },
+  boostOff:x=>{ const sp=[x,900]; tone(700,160,.3,'sawtooth',.05,{sp}); noise(.3,.08,3000,{f1:300,sp}) },
+  driftStage:(st,x)=>{ const sp=[x,900],f=[0,660,880,1320][st]||660; tone(f,f*1.5,.14,'square',.05,{sp}); fm(f*2,1.5,1.2,.2,.05,{sp,rv:.3}); noise(.08,.07,9000,{type:'highpass',f1:6000,sp}) },
+  driftRelease:(st,x)=>{ const sp=[x,900]; tone(100,50,.25,'sine',.2+.08*st,{sp}); noise(.35,.1+.03*st,1200,{type:'bandpass',f1:5200,q:1,sp,rv:.2}); tone(300,200*(1+st),.3,'sawtooth',.05,{sp}) },
+  itemTick:(k)=>{ tone(500+k*700,500+k*700,.03,'square',.035) },
+  itemLand:(it)=>{ chime(880,.12,.4); tone(440,880,.2,'sine',.1,{rv:.4}); if(['cannon','burst','edge','bomb'].includes(it))ARP([1319,1760,2349],.05,'sine',.06,.5) },
+  bombSel:k=>{ const f=[330,247,440][k]||330; tone(f,f*1.2,.1,'triangle',.08,{rv:.15}); tone(f*.5,f*.5,.12,'sine',.1) },
+  bombStart:k=>{ music.duck(.2,1.1); tone(70,22,1.2,'sine',.38,{rv:.5});
+    if(k===0){ noise(1.4,.2,700,{type:'bandpass',f1:5000,q:.8,rv:.5}) } else if(k===1){ tone(60,200,.9,'sine',.2,{rv:.4}) } else { for(let i=0;i<8;i++)tone(900+i*130,1500+i*130,.12,'sawtooth',.03,{at:i*.04,rv:.25}) } },
+  bombPhase:(k,ph)=>{ if(k!==1)return; if(ph===1){ tone(55,70,1.3,'sine',.2,{rv:.4}); fm(120,1.01,.5,1.3,.1,{rv:.3}) } if(ph===2){ music.duck(.15,.8); tone(400,30,.55,'sawtooth',.14,{rv:.5}); noise(.6,.3,6000,{f1:100,rv:.6}); tone(60,20,1.2,'sine',.42,{at:.5,rv:.6}) } },
+  bombEnd:()=>{ tone(200,60,.5,'sine',.08,{rv:.6}) },
+  sector:()=>{ music.duck(.5,.9); noise(.6,.12,600,{type:'bandpass',f1:6000,q:1,rv:.4}); ARP([392,588,784,1176],.09,'triangle',.09,.5); tone(65,50,.9,'sine',.3,{at:.3,rv:.4}) },
+  death:()=>{ music.duck(.04,1.8); tone(260,30,1.5,'sawtooth',.18,{rv:.5}); tone(130,22,1.7,'sine',.34,{rv:.4}); noise(1.2,.2,900,{f1:60,rv:.4}); fm(800,1.5,3,.9,.06,{at:.1,rv:.5}) },
+  comboBreak:()=>{ ARP([660,494,392],.07,'triangle',.06,.3) },
+  pass:(x,ty)=>{ const big=ty==='wall'||ty==='sentry', sp=[x,900]; noise(big?.6:.4,big?.22:.14,3200,{type:'bandpass',f1:350,q:2.2,sp,rv:.1}); if(big)tone(120,40,.35,'sine',.18,{sp}) },
+  whiz:x=>{ const sp=[x,900]; tone(2600,650,.22,'triangle',.05,{sp}); noise(.12,.05,7000,{type:'bandpass',f1:1500,q:2,sp}) },
+  warn:x=>{ const sp=[x,3000]; tone(1500,1500,.05,'square',.025,{sp}); tone(1100,1100,.05,'square',.02,{sp,at:.07}) },
+  uiNav:pg=>{ if(pg){ noise(.12,.06,1800,{type:'bandpass',f1:5000,q:1.2}); tone(500,800,.08,'sine',.05) } else { tone(1000,1000,.025,'triangle',.05); tone(2000,2000,.02,'sine',.015) } },
+  uiOk:()=>{ tone(700,1100,.07,'triangle',.07,{rv:.2}); tone(1400,2200,.06,'sine',.03) },
+  uiBack:()=>{ tone(800,420,.08,'triangle',.06,{rv:.15}) },
+  uiHoldDone:()=>{ ARP([660,990,1320],.05,'triangle',.09,.35); tone(110,60,.25,'sine',.2) },
+  alarm:f=>{ tone(72,44,.2,'sine',.3,{rv:.15}); tone(66,40,.18,'sine',.22,{at:.17}); if(f<.5)tone(1300+(1-f)*900,1300+(1-f)*900,.07,'square',.03,{at:.34}) }
+};
+Object.assign(sfx,sfxMore);
+sfx.count=m=>{ const f=[0,990,740,554][m]||660; tone(f,f,.12,'triangle',.12,{rv:.2}); tone(f*2,f*2,.1,'sine',.04); noise(.2,.05,3000,{type:'bandpass',f1:7000,q:1,rv:.1}) };
+sfx.go=()=>{ tone(990,1980,.3,'triangle',.13,{rv:.35}); tone(495,990,.34,'sine',.1,{rv:.35}); noise(.25,.08,6000,{type:'highpass',f1:2500,rv:.3}); tone(70,40,.4,'sine',.32); ARP([660,990,1320,1980],.05,'sine',.06,.4) };
+sfx.cannon=(x,cc)=>{ const sp=[x,900],at=.06,w=cc<.25?.5:1; tone(1900,110,.55,'sawtooth',.12*w,{sp,rv:.3,at}); tone(80,30,.9,'sine',.4*w,{sp,rv:.4,at}); noise(.7,.3*w,5200,{f1:100,sp,rv:.5,at}); noise(.04,.2,9000,{type:'highpass',f1:2500,sp,at});
+  tone(300,60,1.5,'sine',.1*w,{sp,rv:.8,at:at+.05}); if(cc>=.6)fm(520,2.76,3,1.6,.08,{sp,rv:.8,at:at+.05}); music.duck(.5,.5) };
+const _dmg=sfx.dmg; sfx.dmg=()=>{ engDuck=performance.now()+260; _dmg() };
+
+/* sustained loops: created on first use, then only their gain and pitch move */
+const LP={};
+function getNbuf(){ if(!nbuf){nbuf=ac.createBuffer(1,ac.sampleRate,ac.sampleRate);const a=nbuf.getChannelData(0);for(let i=0;i<a.length;i++)a[i]=Math.random()*2-1} return nbuf }
+function mkLoop(srcs){ const out=ac.createGain(); out.gain.value=0; let pn=null,n=out; if(ac.createStereoPanner){ pn=ac.createStereoPanner(); out.connect(pn); n=pn } n.connect(master);
+  const nodes=srcs.map(sp=>{ const sg=ac.createGain(); sg.gain.value=sp.g==null?1:sp.g; let src,flt=null;
+    if(sp.t==='noise'){ src=ac.createBufferSource(); src.buffer=getNbuf(); src.loop=true; flt=ac.createBiquadFilter(); flt.type=sp.ft||'bandpass'; flt.frequency.value=sp.f||1000; flt.Q.value=sp.q||1; src.connect(flt); flt.connect(sg); src.start(0,Math.random()*.5) }
+    else { src=ac.createOscillator(); src.type=sp.type||'sine'; src.frequency.value=sp.f||100; if(sp.det)src.detune.value=sp.det; src.connect(sg); src.start() }
+    sg.connect(out); return {src,flt} });
+  return {out,pn,nodes} }
+function drv(id,srcs,vol,freqs,pan){ let l=LP[id]; if(!l){ if(vol<=.001)return; l=LP[id]=mkLoop(srcs) }
+  const t=ac.currentTime; l.out.gain.setTargetAtTime(vol,t,.08);
+  if(freqs)l.nodes.forEach((n,i)=>{ const f=freqs[i]; if(f!=null)(n.flt||n.src).frequency.setTargetAtTime(f,t,.09) });
+  if(pan!=null&&l.pn)l.pn.pan.setTargetAtTime(pan,t,.12) }
+const LD={
+  drift:[{t:'noise',ft:'bandpass',f:1500,q:1.8},{t:'osc',type:'sawtooth',f:70,g:.25}],
+  grind:[{t:'noise',ft:'bandpass',f:3200,q:2},{t:'osc',type:'sawtooth',f:95,g:.3}],
+  glide:[{t:'noise',ft:'bandpass',f:700,q:.6}],
+  brake:[{t:'noise',ft:'lowpass',f:1200,q:.7},{t:'osc',type:'sawtooth',f:80,g:.25}],
+  charge:[{t:'osc',type:'sawtooth',f:200,g:.7},{t:'osc',type:'sine',f:60,g:.9},{t:'osc',type:'sawtooth',f:203,g:.5}],
+  aegis:[{t:'osc',type:'sine',f:220},{t:'osc',type:'sine',f:330.6,g:.7},{t:'osc',type:'sine',f:441,g:.3}],
+  edge:[{t:'osc',type:'triangle',f:1800},{t:'osc',type:'triangle',f:1807,g:.8},{t:'noise',ft:'highpass',f:7000,q:.7,g:.3}],
+  slip:[{t:'osc',type:'sine',f:700},{t:'osc',type:'sine',f:706,g:.8},{t:'noise',ft:'highpass',f:5000,q:.7,g:.4}],
+  sen:[{t:'osc',type:'sine',f:150},{t:'osc',type:'sine',f:227,g:.7},{t:'osc',type:'triangle',f:75,g:.5}],
+  riv:[{t:'osc',type:'sawtooth',f:240,g:.5},{t:'noise',ft:'bandpass',f:1500,q:1.2,g:.6}],
+  wal:[{t:'osc',type:'sawtooth',f:45,g:.6},{t:'noise',ft:'lowpass',f:260,q:.7}],
+  bmb:[{t:'osc',type:'sawtooth',f:120,g:.5},{t:'noise',ft:'bandpass',f:900,q:1.1,g:.7}],
+  hold:[{t:'osc',type:'sine',f:300},{t:'osc',type:'triangle',f:301,g:.6}],
+  bed:[{t:'osc',type:'sine',f:55},{t:'osc',type:'sine',f:82.5,g:.6,det:4},{t:'noise',ft:'lowpass',f:300,q:.7,g:.5}]
+};
+const DS=[{},{}], DG={sector:null,combo:0,dead:false,bomb:null,ph:-1,alarmT:0,mineT:0,warnT:0,hold:0,tun:false};
+const BEDF=[55,58.3,49,65.4,51.9,61.7,55];
+function audioDirector(dt,ev){
+  if(!ac||ac.state!=='running')return;
+  try{
+  const play=G.mode==='play'&&!G.dead, g=DG, nowMs=performance.now();
+  /* UI */
+  if(G.mode!=='play'&&G.mode!=='cover'){ if(ev.nav||ev.navx)sfx.uiNav(G.mode==='guide'&&ev.navx); if(ev.ok)sfx.uiOk(); if(ev.back)sfx.uiBack() }
+  { const h=G.mode==='pause'&&holdT>0?holdT/.55:0; drv('hold',LD.hold,h>0?.03+.04*h:0,[300+h*900,301+h*903]); if(g.hold>.4&&holdT<=0&&(G.mode!=='pause'||holdT<0))sfx.uiHoldDone(); g.hold=h }
+  /* tunnels close the space in: darker, wetter */
+  { const t=ac.currentTime; if(tunLP)tunLP.frequency.setTargetAtTime(G.tun&&play?4200:20000,t,.25); if(rvWet)rvWet.gain.setTargetAtTime(G.tun&&play?1.05:.55,t,.3) }
+  /* per player */
+  pls.slice(0,G.np).forEach((P,i)=>{ const S=DS[i], I=inps[i], on=play&&P.alive, pan=pnx(P.x), id=k=>k+i;
+    drv(id('drift'),LD.drift,on&&P.drifting?.03+.012*P.driftStage:0,[1200+P.driftStage*500+P.driftT*100,70+P.driftStage*20],pan);
+    if(on){ if(P.driftStage>(S.stg||0))sfx.driftStage(P.driftStage,P.x); if(!P.drifting&&S.drift&&(S.stg||0)>0)sfx.driftRelease(S.stg,P.x) }
+    S.drift=on&&P.drifting; S.stg=on&&P.drifting?P.driftStage:0;
+    drv(id('grind'),LD.grind,on&&P.grind?.035:0,[2600+G.v*.5,90+G.v*.02],pan);
+    S.gt=(S.gt||0)-dt; if(on&&P.grind&&S.gt<=0){ S.gt=rnd(.04,.1); noise(.02,.05,9000,{type:'highpass',f1:5000,sp:[P.x,900]}) }
+    drv(id('glide'),LD.glide,on&&P.air&&I.glide?.028:0,[600+G.v*.15],pan);
+    drv(id('brake'),LD.brake,on&&I.brake>.3&&G.v>800?.03*I.brake:0,[1000+G.v*.05,70+G.v*.01],pan);
+    drv(id('charge'),LD.charge,on&&P.charging?.03+.05*P.cc:0,[200+900*P.cc,60+120*P.cc,203+910*P.cc],pan);
+    drv(id('aegis'),LD.aegis,on&&P.aegisT>0?.022:0,null,pan);
+    if(on&&P.aegisT>0&&P.aegisT<2.5){ S.aw=(S.aw||0)-dt; if(S.aw<=0){ S.aw=.4; tone(880,880,.06,'sine',.05,{sp:[P.x,900]}) } }
+    if(on&&S.aeg&&P.aegisT<=0)tone(660,220,.35,'sine',.1,{rv:.5,sp:[P.x,900]});
+    S.aeg=on&&P.aegisT>0;
+    drv(id('edge'),LD.edge,on&&P.edgeT>0?.012+.01*Math.sin(nowMs/90):0,null,pan);
+    if(on&&S.edg&&P.edgeT<=0)tone(300,90,.3,'square',.06,{sp:[P.x,900]});
+    S.edg=on&&P.edgeT>0;
+    if(on&&P.surgeT>0&&P.surgeT<1.5){ S.sw=(S.sw||0)-dt; if(S.sw<=0){ S.sw=.22; tone(1200+(1.5-P.surgeT)*500,1200+(1.5-P.surgeT)*500,.04,'square',.03,{sp:[P.x,900]}) } }
+    const bst=on&&(P.boostT>0||(I.boost>.15&&P.boostM>0)); if(bst&&!S.bst)sfx.boostOn(P.x); if(!bst&&S.bst&&on)sfx.boostOff(P.x); S.bst=bst;
+    if(on&&P.air&&!S.air&&nowMs-lastPadJ>200)sfx.jump(P.x); if(on&&!P.air&&S.air)sfx.land(P.x,P.trick); S.air=on&&P.air;
+    if(on&&P.item==='?'&&P.rollT>0){ S.rt=(S.rt||0)-dt; if(S.rt<=0){ const k=1-P.rollT/1.25; S.rt=.05+.2*k*k; sfx.itemTick(k) } } });
+  /* shared loops */
+  drv('slip',LD.slip,play?(G.slipT>0?.04:.028*Math.pow(clamp(G.draft/100,0,1),2)):0,[700+G.draft*6+(G.slipT>0?200:0),706+G.draft*6]);
+  drv('bed',LD.bed,play?.012:0,[BEDF[(G.sector-1)%7],BEDF[(G.sector-1)%7]*1.5]);
+  /* sector stinger, death, combo break */
+  if(g.sector!=null&&G.sector>g.sector&&G.mode==='play')sfx.sector(); g.sector=G.sector;
+  if(G.dead&&!g.dead)sfx.death(); g.dead=G.dead;
+  if(g.combo>=2&&G.combo===0&&play)sfx.comboBreak(); g.combo=G.combo;
+  /* low shield: rising alarm */
+  { const f=G.shield/G.shieldMax; if(play&&f<.3){ g.alarmT-=dt; if(g.alarmT<=0){ g.alarmT=lerp(.55,1.3,f/.3); sfx.alarm(f/.3) } } else g.alarmT=0 }
+  /* enemies: approach hums, mine pings, walls, pass-bys, incoming fire */
+  let sen=null,riv=null,wal=null,mine=null; const P0=pls[0];
+  for(const e of ents){ if(e.dead)continue; const T=e.type;
+    if(e._pz!==undefined&&e._pz>ZS&&e.z<=ZS&&!e._pd&&play&&(T==='rival'||T==='wall'||T==='sentry')&&Math.abs(e.x-P0.x)<900){ e._pd=1; sfx.pass(e.x,T) }
+    e._pz=e.z; if(e.z<ZS||e.z>6500)continue;
+    if(T==='sentry'&&(!sen||e.z<sen.z))sen=e; else if(T==='rival'&&(!riv||e.z<riv.z))riv=e; else if(T==='wall'&&(!wal||e.z<wal.z))wal=e; else if(T==='mine'&&(!mine||e.z<mine.z))mine=e }
+  const pr=e=>e&&play?clamp(1-(e.z-ZS)/5000,0,1):0;
+  drv('sen',LD.sen,pr(sen)*.03,sen?[150+pr(sen)*30,227+pr(sen)*45]:null,sen?pnx(sen.x):0);
+  drv('riv',LD.riv,pr(riv)*.03,riv?[200+pr(riv)*260,1000+pr(riv)*1500]:null,riv?pnx(riv.x):0);
+  drv('wal',LD.wal,wal&&play&&wal.z<4500?clamp(1-(wal.z-ZS)/3600,0,1)*.04:0,wal?[40+clamp(1-(wal.z-ZS)/3600,0,1)*40,200+clamp(1-(wal.z-ZS)/3600,0,1)*500]:null,wal?pnx(wal.x):0);
+  g.mineT-=dt; if(mine&&play&&mine.z<3800&&g.mineT<=0){ const k=clamp((mine.z-ZS)/2900,0,1); g.mineT=lerp(.18,.9,k); tone(1500+(1-k)*500,1500+(1-k)*500,.05,'sine',.04,{sp:[mine.x,mine.z]}) }
+  g.warnT-=dt;
+  for(const b of ebul){ if(!b._s){ b._s=1; if(play&&g.warnT<=0){ g.warnT=.12; sfx.warn(b.x) } }
+    if(b._pz!==undefined&&b._pz>ZS&&b.z<=ZS&&play&&pls.some(P=>P.alive&&Math.hypot(P.x-b.x,P.y-b.y)<420))sfx.whiz(b.x); b._pz=b.z }
+  /* bombs: one sound arc per kind */
+  { const B=G.bomb; if(B&&B!==g.bomb){ g.bomb=B; g.ph=-1; sfx.bombStart(B.k) } else if(!B&&g.bomb){ g.bomb=null; sfx.bombEnd() }
+    if(B&&B.k===1&&B.ph!==g.ph){ g.ph=B.ph; sfx.bombPhase(1,B.ph) }
+    if(B&&play){ let f=120,nf=900,v=.05; if(B.k===0){ f=60+B.r/8400*500; nf=500+B.r/8400*5000; v=.06*(1-B.r/9000) } else if(B.k===1){ f=B.ph===0?80+(B.z-ZS)/3700*120:B.ph===1?70+B.pt*40:300-(B.pt||0)*400; nf=B.ph===1?400+B.pt*500:900; v=.06 } else { B.s0=B.s0||nowMs; const a=(nowMs-B.s0)/1000; f=260+a*220; nf=2000+a*1500; v=.04 }
+      drv('bmb',LD.bmb,Math.max(0,v),[Math.max(30,f),nf],pnx(B.P?B.P.x:0)) } else drv('bmb',LD.bmb,0) }
+  }catch(e){ window.__adErr=e }
+}
 
 /* ---------- input: up to two DualShock 4 pads via the Gamepad API (standard mapping), pad 1 -> Player 1, pad 2 -> Player 2.
    buttons 0 X, 1 Circle, 2 Square, 3 Triangle, 4 L1, 5 R1, 6 L2, 7 R2, 9 Options, 11 R3, 12 D-pad up. Keyboard is a development fallback. ---------- */
@@ -916,7 +1054,7 @@ function engineTick(on){ if(!ac||ac.state!=='running'){return}
     o1.start();o2.start();sub.start();ws.start(); eng={o1,o2,sub,f,g,wf,wg} }
   const t=ac.currentTime,sp=clamp((G.v-600)/3000,0,1); let bo=G.bst||0; for(const P of pls){ if(P.boostT>0)bo=Math.max(bo,.7) } bo=Math.min(1,bo);
   const base=46+sp*130+bo*38; eng.o1.frequency.setTargetAtTime(base,t,.08); eng.o2.frequency.setTargetAtTime(base*1.006,t,.08); eng.sub.frequency.setTargetAtTime(base*.5,t,.08);
-  eng.f.frequency.setTargetAtTime(300+sp*1300+bo*1400,t,.1); eng.g.gain.setTargetAtTime(on?.026+.03*sp+.02*bo:0,t,.15);
+  eng.f.frequency.setTargetAtTime(300+sp*1300+bo*1400,t,.1); eng.g.gain.setTargetAtTime(on?(.026+.03*sp+.02*bo)*(performance.now()<engDuck?.15:1):0,t,.08);
   eng.wf.frequency.setTargetAtTime(600+sp*1800+bo*2600,t,.12); eng.wg.gain.setTargetAtTime(on?.01+.05*sp*sp+.06*bo:0,t,.12) }
 function rumble(i,ms,weak,strong){ try{ const a=padRefs[i]&&padRefs[i].vibrationActuator; if(a&&a.playEffect)a.playEffect('dual-rumble',{startDelay:0,duration:ms,weakMagnitude:weak,strongMagnitude:strong}) }catch(e){} }
 
@@ -1176,8 +1314,8 @@ function hurt(d,P){ if(P.invuln>0||!P.alive||G.dead||P.zeroT>0)return false;
   return true }
 function firePlayer(P){ if(P.fireCd>0||G.count>0)return; P.fireCd=(.12)*(G.slipT>0?.65:1)*(P.surgeT>0?.55:1); P.alt=!P.alt; const o=P.alt?-1:1;
   shots.push({x:P.x+o*110,y:P.y,z:ZS+80,vx:0,vy:0,vz:7600,dmg:P.surgeT>0?2:1,kind:'l',life:1.4,p:P.i}); sfx.laser(P.x,o,P.surgeT>0) }
-function doRoll(P,dir){ if(P.rollCd>0||P.roll>0||!P.alive||G.count>0)return; P.roll=.55; P.rollCd=.95; P.rollDir=dir; P.dv=-dir*2900; if(P.air)P.trick=true; sfx.roll() }
-function cycleBomb(P,d){ if(!P.alive||G.count>0)return; P.bt=(P.bt+d+3)%3; P.btT=clk; sfx.lock(); rumble(P.i,40,.2,.2) }
+function doRoll(P,dir){ if(P.rollCd>0||P.roll>0||!P.alive||G.count>0)return; P.roll=.55; P.rollCd=.95; P.rollDir=dir; P.dv=-dir*2900; if(P.air)P.trick=true; sfx.roll(P.x,P.edgeT>0) }
+function cycleBomb(P,d){ if(!P.alive||G.count>0)return; P.bt=(P.bt+d+3)%3; P.btT=clk; sfx.bombSel(P.bt); rumble(P.i,40,.2,.2) }
 /* three bombs, same count. 0 Pulse: a shockwave down the whole track that also breaks walls. 1 Singularity: an orb that drags hazards together, then collapses. 2 Swarm: seekers that each hunt a target. */
 function makeSwarm(P){ const L=ents.filter(e=>!e.dead&&SHOOT[e.type]&&e.z>ZS+300&&e.z<ZFAR-800).sort((a,b)=>a.z-b.z), sk=[];
   for(let i=0;i<10;i++){ const a=i/10*TAU+P.i*.4, tg=L.length?L[i%L.length]:null;
@@ -1190,7 +1328,7 @@ function doBomb(P){ if(G.bombs<=0||G.bombCd>0||!P.alive||G.count>0||G.bomb)retur
 const SHOOT={rival:1,sentry:1,mine:1};
 const SCORE={rival:300,sentry:200,mine:60,wall:0};
 function tgts(){ return ents.filter(e=>!e.dead&&SHOOT[e.type]&&e.z>ZS+500&&e.z<7600).sort((a,b)=>a.z-b.z) }
-function addDmg(e,d,P){ if(e.dead||!SHOOT[e.type])return; e.hp-=d; e.hit=.09; sfx.hit(e.x,e.z); if(e.hp<=0)killEnt(e,P) }
+function addDmg(e,d,P){ if(e.dead||!SHOOT[e.type])return; e.hp-=d; e.hit=.09; sfx.hit(e.x,e.z,d,e.type); if(e.hp<=0)killEnt(e,P) }
 function killEnt(e,P){ e.dead=true; const big=e.type==='rival'||e.type==='sentry'; explode(e.x,e.y,e.z,e.r*(big?1.5:1.2),true); big?sfx.big():sfx.boom();
   addScore(P,SCORE[e.type]||0); addFlow(big?.4:.1); if(big)G.shake=Math.max(G.shake,18) }
 const anyEnemy=()=>{let b=null;for(const e of ents){if(e.dead||!(e.type==='rival'||e.type==='sentry')||e.z<ZS+600)continue;if(!b||e.z<b.z)b=e}return b};
@@ -1244,7 +1382,7 @@ function useItem(P){
   else if(it==='burst'){ burst(P) }
 }
 function spark(P,col){ parts.push({x:P.x+rnd(-70,70),y:P.y-30,z:ZS-60,vx:rnd(-400,400),vy:rnd(40,260),vz:rnd(-200,300),life:.35,max:.35,s:34,c:col||DRIFTC[P.driftStage]}) }
-function launch(P,v){ P.vh=v; P.air=true; P.airT=0; P.trick=false; G.kick=1; sfx.perf(); rumble(P.i,160,.5,.9) }
+function launch(P,v){ P.vh=v; P.air=true; P.airT=0; P.trick=false; G.kick=1; if(v>1800){lastPadJ=performance.now();sfx.padJump(P.x)} rumble(P.i,160,.5,.9) }
 
 
 /* lock-on and vector dash: lock hazards and rivals, then dash through them in order (invulnerable, costs Boost) or release to fire a volley */
@@ -1276,7 +1414,7 @@ function fireBeam(P,cc){
     addDmg(e,dmg*((e.lk&bit)?1.5:1),P); rings.push({x:e.x,y:e.y,z:e.z,r:50,gr:700+500*cc,life:.4,max:.4,c:'#ffffff'}); if(!e.dead)explode(e.x,e.y,e.z,60,false) }
   P.beam.len=stop-ZS;
   for(let i=ebul.length-1;i>=0;i--){ const b=ebul[i]; if(b.z>ZS&&b.z<stop&&Math.abs(b.x-P.x)<w+120&&Math.abs(b.y-P.y)<260){ explode(b.x,b.y,b.z,40,true); ebul.splice(i,1); addScore(P,10) } }
-  G.shake=Math.max(G.shake,8+10*cc); G.flash=Math.max(G.flash,.12+.2*cc); G.hurtFlash=false; G.cfx=cc<.25?.4:1; P.ccS=0; sfx.cannon(P.x); rumble(P.i,120+200*cc,.4+.4*cc,.6+.4*cc) }
+  G.shake=Math.max(G.shake,8+10*cc); G.flash=Math.max(G.flash,.12+.2*cc); G.hurtFlash=false; G.cfx=cc<.25?.4:1; P.ccS=0; sfx.cannon(P.x,cc); rumble(P.i,120+200*cc,.4+.4*cc,.6+.4*cc) }
 function burst(P){
   for(const e of ents){ if(e.dead||Math.abs(e.z-ZS)>2600)continue; if(Math.hypot(e.x-P.x,e.y-P.y)<1500+e.r&&SHOOT[e.type])addDmg(e,5,P) }
   for(let i=ebul.length-1;i>=0;i--){ const b=ebul[i]; if(Math.abs(b.z-ZS)<2600&&Math.hypot(b.x-P.x,b.y-P.y)<1500){explode(b.x,b.y,b.z,30,true);ebul.splice(i,1)} }
@@ -1284,7 +1422,7 @@ function burst(P){
   G.shake=Math.max(G.shake,26); G.flash=Math.max(G.flash,.45); G.hurtFlash=false; sfx.big(); rumble(P.i,300,.6,1) }
 function updateShip(P,dt){
   const I=inps[P.i]; P.invuln=Math.max(0,P.invuln-dt); P.edgeT=Math.max(0,P.edgeT-dt); P.useT=Math.max(0,(P.useT||0)-dt); P.zeroT=Math.max(0,P.zeroT-dt); P.ccd=Math.max(0,P.ccd-dt); if(P.beam){P.beam.t-=dt;if(P.beam.t<=0)P.beam=null} P.boostT=Math.max(0,P.boostT-dt); P.surgeT=Math.max(0,P.surgeT-dt); P.aegisT=Math.max(0,P.aegisT-dt); if(P.aegisT<=0)P.aegis=0;
-  if(P.orbT>0)P.orbT-=dt; if(P.rollT>0){P.rollT-=dt;if(P.rollT<=0){P.item=P.pending;P.pending=null;sfx.pick()}}
+  if(P.orbT>0)P.orbT-=dt; if(P.rollT>0){P.rollT-=dt;if(P.rollT<=0){P.item=P.pending;P.pending=null;sfx.itemLand(P.item)}}
   if(!P.alive){P.y=FLOOR+HOV;P.dash=null;P.dz=0;return}
   if(P.locks.length){const bit=1<<P.i; P.locks=P.locks.filter(e=>{const ok=!e.dead&&e.z>ZS+300; if(!ok)e.lk&=~bit; return ok})}
   const drift=!P.air&&I.brake>.3&&Math.abs(I.ax)>.45&&G.count<=0&&G.v>700, c0=curv(G.dist+ZS);
@@ -1302,7 +1440,7 @@ function updateShip(P,dt){
   P.y=FLOOR+HOV+P.h+(P.air?0:Math.sin(clk*3+P.i)*5);
   const k2=1-Math.exp(-8*dt); P.rz=lerp(P.rz,-P.vx/1900*.75-(drift?Math.sign(I.ax)*.45:0)-push/1500*.25,k2); P.rx=lerp(P.rx,P.air?clamp(P.vh/2400,-.6,.6)*.6:0,k2);
   if(drift){ P.driftT+=dt*(1+(Math.sign(c0)===Math.sign(I.ax)?Math.min(1,Math.abs(c0)/CMAX):0)); const st=P.driftT>2.8?3:P.driftT>1.7?2:P.driftT>.8?1:0;
-    if(st>P.driftStage){P.driftStage=st;sfx.lock();rumble(P.i,60,.2,.3)} P.drifting=true; P.sparkT-=dt; if(P.sparkT<=0){P.sparkT=.04;spark(P)}
+    if(st>P.driftStage){P.driftStage=st;rumble(P.i,60,.2,.3)} P.drifting=true; P.sparkT-=dt; if(P.sparkT<=0){P.sparkT=.04;spark(P)}
     P.rumbleT-=dt; if(P.rumbleT<=0&&P.driftStage>0){P.rumbleT=.3;rumble(P.i,90,0,.25+.1*P.driftStage)} }
   else if(P.drifting){ if(P.driftStage>0){P.boostT=Math.max(P.boostT,[0,.6,1,1.6][P.driftStage]);addFlow(P.driftStage*.6);addDraft(12*P.driftStage);sfx.surge();rumble(P.i,160,.5,.9);G.shake=Math.max(G.shake,10)} P.drifting=false;P.driftT=0;P.driftStage=0 }
   P.grind=!P.air&&Math.abs(P.x)>=PX-30&&G.v>500;
@@ -1314,14 +1452,14 @@ function updateShip(P,dt){
   if(I.fire&&!I.lock&&!P.charging)firePlayer(P);
   if(I.cannon&&!P.cnPrev&&G.count<=0&&P.ccd<=0&&P.boostM<6){ sfx.lock(); rumble(P.i,60,.3,0); P.cnFlash=1 }
   P.cnPrev=!!I.cannon;
-  if(I.cannon&&G.count<=0&&P.ccd<=0&&P.boostM>=6){ P.charging=true; P.cc=Math.min(1,P.cc+dt/.9,Math.max(.12,(P.boostM-6)/34)); P.chT-=dt; if(P.chT<=0){P.chT=.22;rumble(P.i,70,0,.2+.5*P.cc);tone(160+520*P.cc,200+560*P.cc,.2,'sawtooth',.05)} const st=P.cc>=.8?2:P.cc>=.34?1:0; if(st>(P.ccS||0)){P.ccS=st;sfx.lock()} }
+  if(I.cannon&&G.count<=0&&P.ccd<=0&&P.boostM>=6){ P.charging=true; P.cc=Math.min(1,P.cc+dt/.9,Math.max(.12,(P.boostM-6)/34)); P.chT-=dt; if(P.chT<=0){P.chT=.22;rumble(P.i,70,0,.2+.5*P.cc)} const st=P.cc>=.8?2:P.cc>=.34?1:0; if(st>(P.ccS||0)){P.ccS=st;sfx.ccStage(st,P.x)} }
   else if(P.charging){ P.charging=false; const cc=P.cc; P.cc=0; P.boostM=Math.max(0,P.boostM-(6+34*cc)); P.boostDelay=.9; P.ccd=.6; fireBeam(P,cc) }
   if(P.roll>0){ const BL=P.edgeT>0?560:300; P.bladeL=BL; P.bladeA=P.rollDir*(1-P.roll/.55)*TAU;
     for(const e of ents){ if(e.dead||Math.abs(e.z-ZS)>300)continue; const d=Math.hypot(e.x-P.x,e.y-P.y),T=e.type;
       if(T==='mine'&&d<BL+e.r){ e.dead=true; explode(e.x,e.y,e.z,110,true); sfx.boom(); addScore(P,80); addFlow(.2) }
       else if((T==='rival'||T==='sentry')&&d<BL+e.r*.8&&(e.bladeT||0)<=clk){ e.bladeT=clk+.18; addDmg(e,P.edgeT>0?4:2,P); G.shake=Math.max(G.shake,8) }
       else if(T==='wall'&&P.edgeT>0&&e.bh<400&&P.h<e.bh){ e.dead=true; explode(P.x,P.y,e.z,200,true); sfx.big(); addScore(P,100); addFlow(.3) } } }
-  if(I.lock&&G.count<=0){ P.lockT-=dt; if(P.lockT<=0&&P.locks.length<6){const e=nearestLock(P); if(e){e.lk|=1<<P.i;(e.lkt=e.lkt||[0,0])[P.i]=clk;if(e.lk===3)e.syncT=clk;P.locks.push(e);sfx.lock();P.lockT=.11} else P.lockT=.05} }
+  if(I.lock&&G.count<=0){ P.lockT-=dt; if(P.lockT<=0&&P.locks.length<6){const e=nearestLock(P); if(e){e.lk|=1<<P.i;(e.lkt=e.lkt||[0,0])[P.i]=clk;if(e.lk===3)e.syncT=clk;P.locks.push(e);sfx.lockN(P.locks.length,e.lk===3);P.lockT=.11} else P.lockT=.05} }
   else if(P.locks.length){ const L=P.locks.slice(); clearLocks(P); L.filter(e=>SHOOT[e.type]).forEach((e,i)=>P.mq.push({t:i*.07,e,side:i%2?-1:1})) }
   if(G.t%.03<dt){ for(const sx of[-1,1]){ const tr=P.trail; tr.push({x:P.x+sx*27,y:P.y-12,d:G.dist,s:sx}); } while(P.trail.length>28)P.trail.shift() }
   if(!P.air&&Math.abs(c0)>CMAX*.3&&Math.abs(P.x-lineX(G.dist+ZS))<300){ G.lineT+=dt; addFlow(.35*dt); }
@@ -1359,7 +1497,7 @@ function updateEntities(dt){
     if(T==='rival'&&!e.done&&Math.abs(e.z-ZS)<140){ for(const P of pls){ if(P.alive&&P.zeroT<=0&&Math.hypot(P.x-e.x,P.y-e.y)<e.r+80){ e.done=1; if(P.roll>0||P.drifting||P.driftStage>0){ addDmg(e,3,P); e.bx+=Math.sign(e.x-P.x||1)*700; P.boostT=Math.max(P.boostT,.5); addScore(P,150); addFlow(.5); G.shake=Math.max(G.shake,16); rumble(P.i,120,.6,.8); sfx.hit() } else { hurt(14,P); killEnt(e,P) } break } } }
     if(T==='boost'||T==='jump'){ const len=T==='boost'?500:700;
       if(e.z<=ZS+30&&e.z+len>ZS){ for(const P of pls){ const b=1<<P.i; if(e.done&b||!P.alive||P.air||Math.abs(P.x-e.x)>e.r)continue; e.done|=b;
-        if(T==='boost'){P.boostT=Math.max(P.boostT,1.1);addDraft(10);addScore(P,50);addFlow(.3);sfx.surge();rumble(P.i,100,.3,.6);G.shake=Math.max(G.shake,6)}
+        if(T==='boost'){P.boostT=Math.max(P.boostT,1.1);addDraft(10);addScore(P,50);addFlow(.3);sfx.padBoost(P.x);rumble(P.i,100,.3,.6);G.shake=Math.max(G.shake,6)}
         else{launch(P,2300);addScore(P,100);addDraft(10)} } } }
     if(T==='gate'&&!e.done&&z0>ZS&&e.z<=ZS){ e.done=1; const hits=pls.filter(P=>P.alive&&Math.hypot(P.x-e.x,P.y-e.y)<e.r*.9);
       if(hits.length){G.combo=Math.min(5,G.combo+1);hits.forEach(P=>{addScore(P,250*G.combo);addDraft(10);addFlow(.8);rumble(P.i,90,.3,.2)});sfx.gate(G.combo);rings.push({x:e.x,y:e.y,z:ZS,r:e.r,gr:e.r*1.8,life:.5,max:.5,c:COL.ice})}else G.combo=0 }
@@ -1704,8 +1842,6 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseGame(f
   fb.addEventListener('click',e=>{ e.preventDefault(); window.open(location.href.split('#')[0],'_blank','noopener') });
   setInterval(()=>{ let pol=true; try{ const pp=document.permissionsPolicy||document.featurePolicy; if(pp&&pp.allowsFeature)pol=pp.allowsFeature('gamepad') }catch(err){}
     fb.hidden=!(emb&&G.mode==='cover'&&padCount===0&&(gpBlocked||!pol||performance.now()>6000)) },1000) }
-/* low-shield heartbeat */
-setInterval(()=>{ if(G.mode==='play'&&!G.dead&&G.shield<G.shieldMax*.28&&ac&&ac.state==='running'){ tone(72,44,.2,'sine',.3,{rv:.15}); tone(66,40,.18,'sine',.22,{at:.17}); if(G.shield<G.shieldMax*.14)tone(1760,1760,.07,'square',.03,{at:.34}) } },1150)
 /* sound pill: shown on the cover until the browser has let audio start (a controller press cannot always unlock it) */
 { const sb=document.getElementById('sndFb'); setInterval(()=>{ sb.hidden=!(G.mode==='cover'&&performance.now()>3500&&(!ac||ac.state!=='running')) },700) }
 /* wall integration: embedded -> tell the parent; standalone -> plain link */
@@ -2484,7 +2620,7 @@ function frame(now){
     G.t+=dt; G.dist+=G.v*dt; updateTrack();
     const al=aliveP(),ref=al.length?al:pls; G.cx=ref.reduce((s,p)=>s+p.x,0)/ref.length; G.cy=ref.reduce((s,p)=>s+p.y,0)/ref.length;
     if(G.mode==='play'){ G.bst=0;G.brk=0;G.grindN=0; G.bombCd=Math.max(0,G.bombCd-dt);
-      if(G.count>0){ G.count-=dt; const m=Math.ceil(G.count-.2); if(m!==G.countN&&m>=1&&m<=3){G.countN=m;banner(String(m));sfx.count()} if(G.count<=0){G.count=0;banner(`${COPY.sector} 1`);sfx.go()} }
+      if(G.count>0){ G.count-=dt; const m=Math.ceil(G.count-.2); if(m!==G.countN&&m>=1&&m<=3){G.countN=m;banner(String(m));sfx.count(m)} if(G.count<=0){G.count=0;banner(`${COPY.sector} 1`);sfx.go()} }
       for(const P of pls){ const I=inps[P.i]; if(I.bn)cycleBomb(P,1); if(I.bp)cycleBomb(P,-1); if(I.bomb)doBomb(P); if(I.rollL)doRoll(P,1); if(I.rollR)doRoll(P,-1); if(I.item)useItem(P); updateShip(P,dt); updateMissiles(P,dt) }
       const bT=Math.max(0,...pls.map(p=>p.alive?p.boostT:0)), sg=pls.some(p=>p.alive&&p.surgeT>0);
       let tv=BASE*(1+Math.min(.28,(G.sector-1)*.04))*(1+.7*G.bst)*(1-.5*G.brk)*(bT>0?1.45:1)*(G.slipT>0?1.2:1)*(sg?1.18:1)*(G.count>0?.65:1)*(G.grindN?.8:1);
@@ -2504,7 +2640,7 @@ function frame(now){
   cam.x=lerp(cam.x,tx,kc);cam.y=lerp(cam.y,ty,kc);
   const drifter=pls.find(p=>p.drifting), rollT=-c0/CMAX*.075+(drifter?-Math.sign(inps[drifter.i].ax)*.035:0)+(Math.sin(clk*1.3)*.004);
   G.roll=lerp(G.roll,rollT,1-Math.exp(-3*dt)); G.pan+=(c0/CMAX)*(G.v/1400)*dt;
-  if(!cover){ if(SPK&&SPK.on&&SPK.ok)SPK.render(); else render() } { const tn=inTunnel(G.dist+ZS); if(tn&&!G.tun&&G.mode==='play'){noise(.7,.22,3600)} G.tun=tn; engineTick(G.mode==='play') }
+  if(!cover){ if(SPK&&SPK.on&&SPK.ok)SPK.render(); else render() } { const tn=inTunnel(G.dist+ZS); if(tn&&!G.tun&&G.mode==='play'){noise(.7,.22,3600)} G.tun=tn; engineTick(G.mode==='play'&&!G.dead); audioDirector(dt,ev) }
   hudT-=dt;if(hudT<=0){hudT=.1;if(!cover)hud()}
   adaptCd-=dt; if(adaptCd<=0){ const ft=1000/Math.max(1,fps); if(ft>24&&rs>.31){setRes(Math.max(.3,rs-.05));adaptCd=2}else if(ft<13&&rs<rsMax-.01){setRes(Math.min(rsMax,rs+.05));adaptCd=4}else adaptCd=1 }
   if(DEBUG){el.dbg.style.display='block';el.dbg.textContent=`fps ${fps.toFixed(0)}  render ${rs.toFixed(2)}  bg ${GL?'webgl':'2d'}  pads ${padCount}  v ${G.v.toFixed(0)}  flow ${G.flow.toFixed(1)} draft ${G.draft.toFixed(0)}\nP1 ax ${inps[0].ax.toFixed(2)} h ${PL[0].h.toFixed(0)}  P2 ax ${inps[1].ax.toFixed(2)} h ${PL[1].h.toFixed(0)}`}
